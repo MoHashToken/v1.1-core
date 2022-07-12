@@ -7,7 +7,10 @@ import "./CurrencyOracle.sol";
 /// @title Stable coin manager
 /// @notice This handles all stable coin operations related to the token
 
-abstract contract StableCoin {
+contract StableCoin {
+    /// @dev All assets are stored with 4 decimal shift
+    uint8 public constant MO_DECIMALS = 4;
+
     /// @dev Mapping points to the address where the stablecoin contract is deployed on chain
     mapping(bytes32 => address) public contractAddressOf;
 
@@ -15,16 +18,19 @@ abstract contract StableCoin {
     mapping(bytes32 => address) public pipeAddressOf;
 
     /// @dev Array of all stablecoins added to the contract
-    bytes32[] public stableCoinsAssociated;
-
-    /// @dev Address of the associated MoToken
-    address public token;
+    bytes32[] private stableCoinsAssociated;
 
     /// @dev OraclePriceExchange Address contract associated with the stable coin
     address public currencyOracleAddress;
 
-    /// @dev fiatCurrency associated with tokens
-    bytes32 public fiatCurrency = "USD";
+    /// @dev platform fee currency associated with tokens
+    bytes32 public platformFeeCurrency = "USDC";
+
+    /// @dev Accrued fee amount charged by the platform
+    uint256 public accruedPlatformFee;
+
+    /// @dev Implements RWA manager and whitelist access
+    address public accessControlManagerAddress;
 
     event CurrencyOracleAddressSet(address indexed currencyOracleAddress);
     event StableCoinAdded(
@@ -33,6 +39,73 @@ abstract contract StableCoin {
         address indexed pipeAddress
     );
     event StableCoinDeleted(bytes32 indexed symbol);
+    event AccessControlManagerSet(address indexed accessControlAddress);
+
+    constructor(address _accessControlManager) {
+        accessControlManagerAddress = _accessControlManager;
+        emit AccessControlManagerSet(_accessControlManager);
+    }
+
+    /// @notice Access modifier to restrict access only to owner
+
+    modifier onlyOwner() {
+        AccessControlManager acm = AccessControlManager(
+            accessControlManagerAddress
+        );
+        require(acm.isOwner(msg.sender), "NO");
+        _;
+    }
+
+    /// @notice Access modifier to restrict access only to whitelisted addresses
+
+    modifier onlyWhitelisted() {
+        AccessControlManager acm = AccessControlManager(
+            accessControlManagerAddress
+        );
+        require(acm.isWhiteListed(msg.sender), "NW");
+        _;
+    }
+
+    /// @notice Access modifier to restrict access only to RWA manager addresses
+
+    modifier onlyRWAManager() {
+        AccessControlManager acm = AccessControlManager(
+            accessControlManagerAddress
+        );
+        require(acm.isRWAManager(msg.sender), "NR");
+        _;
+    }
+
+    /// @notice Access modifier to restrict access only to Admin addresses
+
+    modifier onlyAdmin() {
+        AccessControlManager acm = AccessControlManager(
+            accessControlManagerAddress
+        );
+        require(acm.isAdmin(msg.sender), "NA");
+        _;
+    }
+
+    /// @notice Setter for accessControlManagerAddress
+    /// @param _accessControlManagerAddress Set accessControlManagerAddress to this address
+
+    function setAccessControlManagerAddress(
+        address _accessControlManagerAddress
+    ) external onlyOwner {
+        accessControlManagerAddress = _accessControlManagerAddress;
+        emit AccessControlManagerSet(_accessControlManagerAddress);
+    }
+
+    /// @notice Allows setting currencyOracleAddress
+    /// @param _currencyOracleAddress address of the currency oracle
+
+    function setCurrencyOracleAddress(address _currencyOracleAddress)
+        external
+        onlyOwner
+    {
+        currencyOracleAddress = _currencyOracleAddress;
+        emit CurrencyOracleAddressSet(currencyOracleAddress);
+    }
 
     /// @notice Adds a new stablecoin
     /// @dev There can be no duplicate entries for same stablecoin symbol
@@ -40,11 +113,11 @@ abstract contract StableCoin {
     /// @param _contractAddress Stablecoin contract address on chain
     /// @param _pipeAddress Pipe address associated with the stablecoin
 
-    function _addStableCoin(
+    function addStableCoin(
         bytes32 _symbol,
         address _contractAddress,
         address _pipeAddress
-    ) internal {
+    ) external onlyOwner {
         require(
             _symbol.length > 0 && contractAddressOf[_symbol] == address(0),
             "SCE"
@@ -58,7 +131,7 @@ abstract contract StableCoin {
     /// @notice Deletes an existing stablecoin
     /// @param _symbol Stablecoin symbol
 
-    function _deleteStableCoin(bytes32 _symbol) internal {
+    function deleteStableCoin(bytes32 _symbol) external onlyOwner {
         require(contractAddressOf[_symbol] != address(0), "NC");
         delete contractAddressOf[_symbol];
         delete pipeAddressOf[_symbol];
@@ -72,6 +145,17 @@ abstract contract StableCoin {
             }
         }
         emit StableCoinDeleted(_symbol);
+    }
+
+    /// @notice Getter for Stable coins associated
+    /// @return bytes32[] Stable coins accepted by the token
+
+    function getStableCoinsAssociated()
+        external
+        view
+        returns (bytes32[] memory)
+    {
+        return stableCoinsAssociated;
     }
 
     /// @notice Get balance of the stablecoins in the wallet address
@@ -88,44 +172,45 @@ abstract contract StableCoin {
         return ier.balanceOf(_address);
     }
 
-    /// @notice Gets the difference between decimals of MoToken and decimals of the stablecoin
-    /// @param _symbol Stablecoin symbol
-    /// @return uint8 Returns the difference between decimals (0-18)
-
-    function getDecimalsDiff(bytes32 _symbol) public view returns (uint8) {
-        return (decimals(token) - decimals(contractAddressOf[_symbol]));
-    }
-
     /// @notice Gets the decimals of the token
-    /// @param _tokenAddress Token address on chain
+    /// @param _tokenSymbol Token symbol
     /// @return uint8 ERC20 decimals() value
 
-    function decimals(address _tokenAddress) internal view returns (uint8) {
-        IERC20Basic ier = IERC20Basic(_tokenAddress);
+    function decimals(bytes32 _tokenSymbol) public view returns (uint8) {
+        IERC20Basic ier = IERC20Basic(contractAddressOf[_tokenSymbol]);
         return ier.decimals();
     }
 
-    /// @notice Gets the total stablecoin balance associated with the MoToken in fiatCurrency
+    /// @notice Gets the total stablecoin balance associated with the MoToken
     /// @return balance Stablecoin balance
 
-    function totalBalanceInFiat() public view returns (uint256 balance) {
+    function totalBalanceInFiat(address _token, bytes32 _fiatCurrency)
+        public
+        view
+        returns (uint256 balance)
+    {
         CurrencyOracle currencyOracle = CurrencyOracle(currencyOracleAddress);
         for (uint256 i = 0; i < stableCoinsAssociated.length; i++) {
             (uint64 stableToFiatConvRate, uint8 decimalsVal) = currencyOracle
                 .getFeedLatestPriceAndDecimals(
                     stableCoinsAssociated[i],
-                    fiatCurrency
+                    _fiatCurrency
                 );
-            uint8 finalDecVale = decimalsVal +
-                decimals(contractAddressOf[stableCoinsAssociated[i]]) -
-                6;
-            balance += ((balanceOf(stableCoinsAssociated[i], token) *
-                stableToFiatConvRate) / (10**finalDecVale));
-            balance += ((balanceOf(
-                stableCoinsAssociated[i],
-                pipeAddressOf[stableCoinsAssociated[i]]
-            ) * stableToFiatConvRate) / (10**finalDecVale));
+            uint8 finalDecVal = decimalsVal +
+                decimals(stableCoinsAssociated[i]) -
+                MO_DECIMALS;
+            balance +=
+                (balanceOf(stableCoinsAssociated[i], _token) *
+                    stableToFiatConvRate) /
+                (10**finalDecVal);
+            balance +=
+                (balanceOf(
+                    stableCoinsAssociated[i],
+                    pipeAddressOf[stableCoinsAssociated[i]]
+                ) * stableToFiatConvRate) /
+                (10**finalDecVal);
         }
+        balance -= accruedPlatformFee;
     }
 
     /// @notice Transfers tokens from an external address to the MoToken Address
@@ -135,12 +220,13 @@ abstract contract StableCoin {
     /// @return bool Boolean indicating transfer success/failure
 
     function initiateTransferFrom(
+        address _token,
         address _from,
         uint256 _amount,
         bytes32 _symbol
-    ) internal returns (bool) {
+    ) external returns (bool) {
         require(contractAddressOf[_symbol] != address(0), "NC");
-        MoToken moToken = MoToken(token);
+        MoToken moToken = MoToken(_token);
         return (
             moToken.receiveStableCoins(
                 contractAddressOf[_symbol],
@@ -155,13 +241,14 @@ abstract contract StableCoin {
     /// @param _symbol Symbol of the tokens to transfer
     /// @return bool Boolean indicating transfer success/failure
 
-    function _transferFundsToPipe(bytes32 _symbol, uint256 _amount)
-        internal
-        returns (bool)
-    {
-        require(_amount < balanceOf(_symbol, token), "NF");
+    function transferFundsToPipe(
+        address _token,
+        bytes32 _symbol,
+        uint256 _amount
+    ) external onlyRWAManager returns (bool) {
+        checkForSufficientBalance(_token, _symbol, _amount);
 
-        MoToken moToken = MoToken(token);
+        MoToken moToken = MoToken(_token);
         return (
             moToken.transferStableCoins(
                 contractAddressOf[_symbol],
@@ -169,5 +256,21 @@ abstract contract StableCoin {
                 _amount
             )
         );
+    }
+
+    /// @notice Check for sufficient balance
+    /// @param _symbol Symbol of the token
+    /// @param _amount amount to check
+
+    function checkForSufficientBalance(
+        address _token,
+        bytes32 _symbol,
+        uint256 _amount
+    ) public view {
+        uint256 balance = balanceOf(_symbol, _token);
+        if (_symbol == platformFeeCurrency) {
+            balance -= accruedPlatformFee;
+        }
+        require(_amount <= balance, "NF");
     }
 }

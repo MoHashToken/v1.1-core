@@ -14,15 +14,22 @@ import "./access/AccessControlManager.sol";
  */
 
 contract MoToken is ERC20PresetMinterPauser {
-
     /// @dev Address of contract which manages whitelisted addresses
     address public accessControlManagerAddress;
+
+    event AccessControlManagerSet(address indexed accessControlAddress);
 
     /// @notice Constructor which only serves as passthrough for _tokenName and _tokenSymbol
 
     constructor(string memory _tokenName, string memory _tokenSymbol)
         ERC20PresetMinterPauser(_tokenName, _tokenSymbol)
-    {
+    {}
+
+    /// @notice Overrides decimals() function to restrict decimals to 4
+    /// @return uint8 returns number of decimals for display
+
+    function decimals() public pure override returns (uint8) {
+        return 4;
     }
 
     /// @notice Burns tokens from the given address
@@ -97,7 +104,9 @@ contract MoToken is ERC20PresetMinterPauser {
     /// @param _account External address to check
 
     function _onlywhitelisted(address _account) internal view {
-        AccessControlManager acm = AccessControlManager(accessControlManagerAddress);
+        AccessControlManager acm = AccessControlManager(
+            accessControlManagerAddress
+        );
         require(acm.isWhiteListed(_account), "NW");
     }
 
@@ -107,7 +116,11 @@ contract MoToken is ERC20PresetMinterPauser {
     /// @param _amount Amount of tokens to be transferred
     /// @return bool Boolean indicating whether the transfer was success/failure
 
-    function transferFrom(address _from, address _to, uint256 _amount) public override returns (bool) {
+    function transferFrom(
+        address _from,
+        address _to,
+        uint256 _amount
+    ) public virtual override returns (bool) {
         _onlywhitelisted(_to);
         return super.transferFrom(_from, _to, _amount);
     }
@@ -117,7 +130,12 @@ contract MoToken is ERC20PresetMinterPauser {
     /// @param _amount Amount of tokens to be transferred
     /// @return bool Boolean indicating whether the transfer was success/failure
 
-    function transfer(address _to, uint256 _amount) public override returns (bool) {
+    function transfer(address _to, uint256 _amount)
+        public
+        virtual
+        override
+        returns (bool)
+    {
         _onlywhitelisted(_to);
         return super.transfer(_to, _amount);
     }
@@ -137,6 +155,6 @@ contract MoToken is ERC20PresetMinterPauser {
     function setAccessControlManagerAddress(address _address) external {
         require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "NW");
         accessControlManagerAddress = _address;
+        emit AccessControlManagerSet(_address);
     }
-
 }

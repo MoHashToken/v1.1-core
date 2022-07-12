@@ -14,6 +14,11 @@ contract MoTokenManagerFactory is Ownable {
     /// @dev Mapping points to the token manager of a given token's symbol
     mapping(bytes32 => address) public symbolToTokenManager;
 
+    /// @dev Holds all the mo token symbols
+    bytes32[] public symbols;
+
+    /// @dev Mapping points to the senior token symbol for a junior token symbol
+    mapping(bytes32 => bytes32) public linkedSrTokenOf;
 
     /// @dev Index used while creating MoTokenManager
     uint16 public tokenId;
@@ -22,6 +27,10 @@ contract MoTokenManagerFactory is Ownable {
         address indexed from,
         bytes32 indexed tokenSymbol,
         address indexed tokenManager
+    );
+    event JrTokenLinkedToSrToken(
+        bytes32 indexed jrToken,
+        bytes32 indexed srToken
     );
 
     /// @notice Adds MoTokenManager for a given MoToken
@@ -32,6 +41,8 @@ contract MoTokenManagerFactory is Ownable {
     function addTokenManager(
         address _token,
         address _tokenManager,
+        address _stableCoin,
+        uint64 _initNAV,
         address _rWADetails
     ) external onlyOwner {
         MoToken mt = MoToken(_token);
@@ -42,11 +53,34 @@ contract MoTokenManagerFactory is Ownable {
         require(symbolToTokenManager[tokenBytes] == address(0), "AE");
 
         tokenId = tokenId + 1;
+        symbolToTokenManager[tokenBytes] = _tokenManager;
 
         MoTokenManager tManager = MoTokenManager(_tokenManager);
-        tManager.initialize(tokenId, _token, _rWADetails);
+        tManager.initialize(
+            tokenId,
+            _token,
+            _stableCoin,
+            _initNAV,
+            _rWADetails
+        );
 
-        symbolToTokenManager[tokenBytes] = _tokenManager;
+        symbols.push(tokenBytes);
+
         emit MoTokenManagerAdded(msg.sender, tokenBytes, _tokenManager);
+    }
+
+    /// @notice Links a Junior token to Senior token.
+    /// @param _jrToken Symbol of MoJuniorToken
+    /// @param _srToken Symbol of Senior MoToken
+
+    function linkJrTokenToSrToken(bytes32 _jrToken, bytes32 _srToken)
+        external
+        onlyOwner
+    {
+        require(symbolToTokenManager[_jrToken] != address(0), "NT");
+        require(symbolToTokenManager[_srToken] != address(0), "NT");
+        require(linkedSrTokenOf[_jrToken] == 0, "AE");
+        linkedSrTokenOf[_jrToken] = _srToken;
+        emit JrTokenLinkedToSrToken(_jrToken, _srToken);
     }
 }

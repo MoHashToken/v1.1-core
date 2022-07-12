@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.2;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/access/AccessControlEnumerable.sol";
 
-contract AccessControlManager is AccessControl  {
-
+contract AccessControlManager is AccessControlEnumerable {
     bytes32 public constant WHITELIST_ROLE = keccak256("WHITELIST_ROLE");
     bytes32 public constant RWA_MANAGER_ROLE = keccak256("RWA_MANAGER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    constructor(){
+    constructor() {
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
         _setRoleAdmin(WHITELIST_ROLE, ADMIN_ROLE);
         _setRoleAdmin(RWA_MANAGER_ROLE, ADMIN_ROLE);
+    }
+
+    function isOwner(address account) external view returns (bool) {
+        return hasRole(DEFAULT_ADMIN_ROLE, account);
     }
 
     function isWhiteListed(address account) external view returns (bool) {
@@ -27,4 +30,11 @@ contract AccessControlManager is AccessControl  {
         return hasRole(ADMIN_ROLE, account);
     }
 
+    function owner() external view returns (address) {
+        return
+            getRoleMember(
+                DEFAULT_ADMIN_ROLE,
+                getRoleMemberCount(DEFAULT_ADMIN_ROLE) - 1
+            );
+    }
 }
